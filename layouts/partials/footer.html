@@ -1,0 +1,257 @@
+<footer class="footer">
+  <span>© 2026 BG Зона - независима и неутрална България</span><br>
+  <span>
+    <a href="https://www.facebook.com/PolitSatira/" target="_blank" rel="noopener noreferrer">Facebook</a> ·
+    Създадено от Малин с помощта на ChatGPT
+  </span><br>
+  <span>
+    <a href="https://t.me/bgzona" target="_blank" rel="noopener noreferrer">Telegram канал - bgzona.win</a> ·
+    <a href="https://t.me/bgzona_win" target="_blank" rel="noopener noreferrer">Telegram група - bgzona.win</a>
+  </span><br>
+  <span>
+    <a href="https://odysee.com/@bgzona.win:5" target="_blank" rel="noopener noreferrer">bgzona.win - Официален видео канал</a> ·
+    <a href="https://odysee.com/@bgzona.kolaji:b" target="_blank" rel="noopener noreferrer">bgzona.win - Колажи и изображения</a>
+  </span><br>
+  <span>
+    <a href="https://d.tube/channel/bgzona" target="_blank" rel="noopener noreferrer">bgzona.win - Алтернативен канал за видео в DTube</a>
+  </span>
+</footer>
+
+<script>
+(function () {
+  const ASSETS_BASE = "{{ .Site.Params.assetsBaseURL }}";
+  const JSON_PATH = "/slideshow/slideshow.json";
+
+  // Production settings:
+  const IDLE_MINUTES = 6;
+  const SLIDE_SECONDS = 30;
+
+  if (!ASSETS_BASE) return;
+
+  let idleTimer = null;
+  let slideTimer = null;
+  let slides = [];
+  let idx = 0;
+  let isOpen = false;
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function el(tag, attrs = {}, children = []) {
+    const e = document.createElement(tag);
+    Object.entries(attrs).forEach(([k, v]) => {
+      if (k === "style") e.style.cssText = v;
+      else if (k === "class") e.className = v;
+      else e.setAttribute(k, v);
+    });
+    children.forEach(c => e.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+    return e;
+  }
+
+  function ensureOverlay() {
+    if (document.getElementById("bgz-slideshow-overlay")) return;
+
+    const style = el("style", {}, [`
+#bgz-slideshow-overlay{position:fixed;inset:0;z-index:99999;display:none;background:#000}
+#bgz-slideshow-overlay.open{display:block}
+#bgz-slideshow-overlay .bgz-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+#bgz-slideshow-overlay .bgz-ui{position:absolute;left:0;right:0;bottom:0;padding:10px 12px;font:14px/1.35 system-ui,Segoe UI,Arial;color:#fff;background:linear-gradient(transparent, rgba(0,0,0,.65))}
+#bgz-slideshow-overlay .bgz-note{opacity:.9}
+#bgz-slideshow-overlay .bgz-close{position:absolute;top:10px;right:10px;width:40px;height:40px;border-radius:10px;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.35);color:#fff;font-size:22px;cursor:pointer}
+#bgz-slideshow-overlay .bgz-close:hover{background:rgba(0,0,0,.55)}
+    `]);
+
+    const img = el("img", { class: "bgz-img", alt: "BG Зона - колажи" });
+    const closeBtn = el("button", { class: "bgz-close", type: "button", title: "Затвори" }, ["X"]);
+    const ui = el("div", { class: "bgz-ui" }, [
+      el("div", { class: "bgz-note" }, [
+        "Слайдшоу - движение/клик/клавиш за връщане. Старт след 6 мин бездействие."
+      ])
+    ]);
+
+    const overlay = el("div", { id: "bgz-slideshow-overlay" }, [style, img, closeBtn, ui]);
+    document.body.appendChild(overlay);
+
+    closeBtn.addEventListener("click", hideOverlay);
+
+    ["mousemove", "mousedown", "keydown", "touchstart", "wheel"].forEach(evt => {
+      overlay.addEventListener(evt, function (e) {
+        e.preventDefault();
+        hideOverlay();
+      }, { passive: false });
+    });
+  }
+
+  function preload(url) {
+    const i = new Image();
+    i.src = url;
+  }
+
+  async function loadSlides() {
+    const res = await fetch(ASSETS_BASE + JSON_PATH, { cache: "no-store" });
+    if (!res.ok) throw new Error("slideshow.json not reachable");
+    const arr = await res.json();
+    if (!Array.isArray(arr) || arr.length === 0) throw new Error("slideshow.json empty");
+    slides = shuffle(arr.slice());
+  }
+
+  function setImg(imgEl, i) {
+    const rel = slides[i];
+    const url = ASSETS_BASE + rel;
+    imgEl.src = url;
+
+    const next = slides[(i + 1) % slides.length];
+    preload(ASSETS_BASE + next);
+  }
+
+  function showOverlay() {
+    if (isOpen) return;
+    ensureOverlay();
+
+    const overlay = document.getElementById("bgz-slideshow-overlay");
+    const img = overlay.querySelector(".bgz-img");
+
+    slides = shuffle(slides.slice());
+    idx = Math.floor(Math.random() * slides.length);
+
+    isOpen = true;
+    overlay.classList.add("open");
+
+    setImg(img, idx);
+
+    clearInterval(slideTimer);
+    slideTimer = setInterval(() => {
+      idx = (idx + 1) % slides.length;
+      setImg(img, idx);
+    }, SLIDE_SECONDS * 1000);
+  }
+
+  function hideOverlay() {
+    const overlay = document.getElementById("bgz-slideshow-overlay");
+    if (!overlay) return;
+
+    isOpen = false;
+    overlay.classList.remove("open");
+    clearInterval(slideTimer);
+    slideTimer = null;
+
+    resetIdle();
+  }
+
+  function resetIdle() {
+    if (isOpen) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (!slides.length) return;
+      showOverlay();
+    }, IDLE_MINUTES * 60 * 1000);
+  }
+
+  async function buildGallery() {
+    console.log("BGZ gallery: start");
+
+    const holder = document.getElementById("bgz-gallery");
+    console.log("BGZ gallery holder:", holder);
+
+    if (!holder) return;
+
+    const res = await fetch(ASSETS_BASE + "/slideshow/gallery.json", { cache: "force-cache" });
+    console.log("BGZ gallery fetch status:", res.status, ASSETS_BASE + "/slideshow/gallery.json");
+
+    if (!res.ok) return;
+
+    const arr = await res.json();
+    console.log("BGZ gallery items:", Array.isArray(arr) ? arr.length : "not-array");
+
+    if (!Array.isArray(arr) || !arr.length) return;
+
+    holder.innerHTML = "";
+
+    for (const rel of arr) {
+      const fullUrl = ASSETS_BASE + rel;
+      const thumbRel = rel.replace("/kolaji/full/bgzona-p-", "/kolaji/og/bgzona-og-");
+      const thumbUrl = ASSETS_BASE + thumbRel;
+
+      const a = document.createElement("a");
+      a.href = fullUrl;
+      a.dataset.full = fullUrl;
+
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = "Колаж";
+      img.src = thumbUrl;
+      img.onerror = () => { img.onerror = null; img.src = fullUrl; };
+
+      a.appendChild(img);
+      holder.appendChild(a);
+    }
+
+    console.log("BGZ gallery rendered:", holder.children.length);
+
+    const lb = document.getElementById("bgz-lightbox");
+    const lbImg = lb ? lb.querySelector("img") : null;
+    const lbX = lb ? lb.querySelector(".bgz-x") : null;
+
+    function close() {
+      if (!lb) return;
+      lb.classList.remove("open");
+      lb.setAttribute("aria-hidden", "true");
+      if (lbImg) lbImg.src = "";
+    }
+
+    holder.addEventListener("click", (e) => {
+      const a = e.target.closest && e.target.closest("a[data-full]");
+      if (!a || !lb || !lbImg) return;
+      e.preventDefault();
+      lbImg.src = a.dataset.full;
+      lb.classList.add("open");
+      lb.setAttribute("aria-hidden", "false");
+    });
+
+    if (lbX) lbX.addEventListener("click", close);
+    if (lb) lb.addEventListener("click", (e) => { if (e.target === lb) close(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  }
+
+  async function init() {
+    try {
+      await loadSlides();
+
+      document.addEventListener("click", (e) => {
+        const a = e.target.closest && e.target.closest('a[href="#slideshow"]');
+        if (!a) return;
+        e.preventDefault();
+        if (slides.length) showOverlay();
+      });
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => {
+          buildGallery();
+        }, { once: true });
+      } else {
+        await buildGallery();
+      }
+
+      resetIdle();
+
+      ["mousemove", "mousedown", "keydown", "touchstart", "wheel", "scroll"].forEach(evt => {
+        window.addEventListener(evt, resetIdle, { passive: true });
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) resetIdle();
+      });
+
+    } catch (e) {
+      console.log("BGZ init error:", e);
+    }
+  }
+
+  init();
+})();
+</script>

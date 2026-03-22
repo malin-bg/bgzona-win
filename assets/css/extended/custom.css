@@ -1,0 +1,26 @@
+/* 2 колони за списъка в /statii/ (desktop), 1 колона на мобилно */
+body.list main.main {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 24px !important;
+  align-items: start !important;
+}
+
+/* Тези елементи са "хедър/описание" и трябва да са на цял ред (две колони) */
+body.list main.main > header.page-header,
+body.list main.main > .post-content {
+  grid-column: 1 / -1 !important;
+}
+
+/* Картите (article) - ето тук ти е рамката */
+body.list main.main > article.post-entry {
+  border: 2px solid red !important;   /* остави го, щом ти харесва */
+  border-radius: 12px !important;
+}
+
+/* Мобилно - 1 колона */
+@media (max-width: 768px) {
+  body.list main.main {
+    grid-template-columns: 1fr !important;
+  }
+}

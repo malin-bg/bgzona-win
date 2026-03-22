@@ -1,0 +1,14 @@
+<div class="link-card">
+  <a class="link-card__a" href="{{ .Get 0 }}" target="_blank" rel="noopener">
+    {{- $img := .Get 1 -}}
+    {{- $title := .Get 2 -}}
+    {{- $desc := .Get 3 -}}
+
+    <img class="link-card__img" src="{{ $img }}" alt="{{ $title }}">
+    <div class="link-card__text">
+      <div class="link-card__title">{{ $title }}</div>
+      <div class="link-card__desc">{{ $desc }}</div>
+      <div class="link-card__cta">Отвори статията</div>
+    </div>
+  </a>
+</div>
