@@ -9,7 +9,7 @@ relativeURLs = false
   ShowReadingTime = false
   ShowPostNavLinks = false
   hideMeta = true
-  images = ["images/og-default.jpg"]
+  images = ["/images/og-default.jpg"]
   assetsBaseURL = "https://malin-bg.github.io/bgzona-assets"
 
   [params.profileMode]
