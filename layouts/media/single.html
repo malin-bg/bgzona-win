@@ -1,0 +1,11 @@
+{{ define "main" }}
+<article class="bgz-media-page" data-media-collection="{{ .Params.collection }}" data-media-id="{{ .Params.stem }}" data-revision="{{ .Params.revision }}" data-og-kind="{{ .Params.ogkind }}">
+  <h1 class="media-sr-only">{{ .Title }}</h1>
+  <a class="full-preview media-hero" data-full="{{ .Params.full }}" data-page="{{ .Permalink }}" data-label="{{ .Title }}" href="{{ .Params.full }}" aria-label="Увеличи {{ .Title }}" aria-haspopup="dialog" aria-controls="media-lightbox">
+    <img class="media-main" src="{{ .Params.full }}" alt="{{ .Title }}">
+  </a>
+  <div class="media-page-controls">{{ partial "bgz-media/actions.html" (dict "page" . "single" true) }}</div>
+  {{ with .Params.usertext }}<div class="media-description">{{ . }}</div>{{ end }}
+  <noscript><p class="media-noscript">За копиране използвайте адреса на страницата в браузъра. Връзките към Facebook и оригинала работят и без JavaScript.</p></noscript>
+</article>
+{{ end }}

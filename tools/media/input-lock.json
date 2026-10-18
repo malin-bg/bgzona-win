@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "archive_name": "bgzona-dev-media-input-bb9fc4fb148eb484.zip",
+  "archive_sha256": "35054cbed0f49ff6a9e656d46c7952bd3c903e6d2fc37dcbfd51d7987800b049",
+  "bytes": 9595193,
+  "members": 48,
+  "source_catalog_sha256": "bb9fc4fb148eb4848f22105d2d2bc9f5e0557f41f0c62a4b7f7bab8bb376608b",
+  "repository": "malin-bg/bgzona-win",
+  "expected_files_sha256": "51c0a23eba4abce281c8a8e3d2c14ebff409e68a7cab04ef8384f21f4de4ee35",
+  "snapshot": {
+    "published": 45,
+    "kolaji": 27,
+    "poslaniya": 18,
+    "slides": 26
+  },
+  "provider": {
+    "release_id": 415843188,
+    "asset_id": 650660022,
+    "tag": "media-dev-bootstrap-20261017-r1",
+    "repository": "malin-bg/bgzona-win-dev"
+  }
+}

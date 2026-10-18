@@ -1,51 +1,98 @@
-name: Deploy Hugo site to Pages
-
-on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Setup Hugo
-        uses: peaceiris/actions-hugo@v3
-        with:
-          hugo-version: "0.155.2"
-          extended: true
-
-      - name: Build
-        run: hugo --minify --baseURL "https://bgzona.win/"
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./public
-
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
+{
+  "name": "Deploy Hugo site to Pages",
+  "on": {
+    "push": {
+      "branches": [
+        "main"
+      ]
+    },
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "pages",
+    "cancel-in-progress": true
+  },
+  "env": {
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "jobs": {
+    "build": {
+      "if": "github.repository == 'malin-bg/bgzona-win' && github.ref == 'refs/heads/main'",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 15,
+      "steps": [
+        {
+          "name": "Checkout current source",
+          "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          "with": {
+            "submodules": "recursive",
+            "persist-credentials": false,
+            "fetch-depth": 1
+          }
+        },
+        {
+          "name": "Python 3.13.16",
+          "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+          "with": {
+            "python-version": "3.13.16"
+          }
+        },
+        {
+          "name": "Pinned image dependency",
+          "run": "python -m pip install --disable-pip-version-check --only-binary=:all: -r tools/media/requirements.txt"
+        },
+        {
+          "name": "Verified Hugo extended 0.155.2",
+          "shell": "bash",
+          "run": "set -euo pipefail\nmkdir \"$RUNNER_TEMP/bgz-hugo\"\ncurl --fail --location --silent --show-error --output \"$RUNNER_TEMP/hugo.tar.gz\" https://github.com/gohugoio/hugo/releases/download/v0.155.2/hugo_extended_0.155.2_linux-amd64.tar.gz\nprintf '%s  %s\\n' '2bf76c75610e75fa5d15fd3dd0e1377c16ce4fa7202713283c744a19323ff419' \"$RUNNER_TEMP/hugo.tar.gz\" | sha256sum --check --strict\ntar -xzf \"$RUNNER_TEMP/hugo.tar.gz\" -C \"$RUNNER_TEMP/bgz-hugo\" hugo\n\"$RUNNER_TEMP/bgz-hugo/hugo\" version"
+        },
+        {
+          "name": "Trusted input, build, current acceptance and seal",
+          "shell": "bash",
+          "run": "python -B tools/media/delivery.py --work \"$RUNNER_TEMP/bgz-delivery\" --hugo \"$RUNNER_TEMP/bgz-hugo/hugo\""
+        },
+        {
+          "name": "Verify accepted output immediately before upload",
+          "shell": "bash",
+          "run": "python -B tools/media/artifact_seal.py verify --root \"$RUNNER_TEMP/bgz-delivery/candidate/public\" --manifest \"$RUNNER_TEMP/bgz-delivery/site-seal.json\" --expected-digest \"$(cat \"$RUNNER_TEMP/bgz-delivery/site-tree.sha256\")\""
+        },
+        {
+          "name": "Upload exactly accepted Pages output",
+          "uses": "actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa",
+          "with": {
+            "name": "github-pages",
+            "path": "${{ runner.temp }}/bgz-delivery/candidate/public",
+            "retention-days": 1
+          }
+        }
+      ]
+    },
+    "deploy": {
+      "needs": "build",
+      "if": "github.repository == 'malin-bg/bgzona-win' && github.ref == 'refs/heads/main' && needs.build.result == 'success'",
+      "permissions": {
+        "pages": "write",
+        "id-token": "write"
+      },
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 10,
+      "environment": {
+        "name": "github-pages",
+        "url": "${{ steps.deployment.outputs.page_url }}"
+      },
+      "steps": [
+        {
+          "name": "Deploy this run accepted Pages artifact",
+          "id": "deployment",
+          "uses": "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
+          "with": {
+            "artifact_name": "github-pages"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{{ define "main" }}{{/* Retain the existing production /kolaji/page/1/ redirect without paginating media cards. */}}{{ $legacyPager := .Paginate (slice) }}{{ if site.Params.media.enabled }}{{ partial "bgz-media/gallery.html" . }}{{ else }}<h1>{{ .Title }}</h1>{{ .Content }}{{ end }}{{ end }}

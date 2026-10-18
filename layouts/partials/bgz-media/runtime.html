@@ -1,0 +1,25 @@
+{{ $style := resources.Get "css/bgz-media.css" | minify | fingerprint }}
+<link rel="stylesheet" href="{{ $style.RelPermalink }}" integrity="{{ $style.Data.Integrity }}" crossorigin="anonymous">
+<dialog id="media-lightbox" aria-label="Преглед на изображение">
+  <div class="media-lightbox-bar">
+    <span id="lightbox-counter" role="status" aria-live="polite"></span>
+    <button id="lightbox-view-toggle" class="media-dialog-button" type="button" aria-pressed="false" aria-controls="media-lightbox">Само изображение</button>
+    <button id="lightbox-close" class="media-dialog-button" type="button" autofocus aria-label="Затвори прегледа (Escape)">Затвори ✕</button>
+  </div>
+  <div class="media-lightbox-image"><img id="lightbox-image" alt="" role="button" tabindex="0" aria-pressed="false" aria-label="Само изображение"></div>
+  <div class="media-lightbox-navigation">
+    <button id="lightbox-prev" class="media-dialog-button" type="button" aria-label="Предишно изображение">← Предишно</button>
+    <a id="lightbox-page" class="media-dialog-button" target="_blank" rel="noopener noreferrer" aria-label="Страница на изображението (нов раздел)">Страница ↗</a>
+    <button id="lightbox-next" class="media-dialog-button" type="button" aria-label="Следващо изображение">Следващо →</button>
+  </div>
+</dialog>
+<dialog id="slideshow" aria-label="Слайдшоу с колажи"><img id="slide-image" alt="Колаж"></dialog>
+{{ $slides := slice }}
+{{ range where site.RegularPages "Type" "media" }}
+{{ if and (eq .Params.collection "kolaji") .Params.slideshow }}
+{{ $slides = $slides | append .Params.full }}
+{{ end }}{{ end }}
+{{ $manifest := dict "schema_version" 1 "images" $slides | jsonify | resources.FromString "media/slideshow.json" }}
+<script>window.mediaConfig={slideshowURL:{{ $manifest.RelPermalink }},idleMs:360000,slideMs:30000};</script>
+{{ $script := resources.Get "js/bgz-media.js" | fingerprint }}
+<script src="{{ $script.RelPermalink }}" defer></script>

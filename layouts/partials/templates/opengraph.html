@@ -8,7 +8,9 @@
   <meta property="og:title" content="{{ . }}">
 {{- end }}
 
-{{- with or .Description .Summary site.Params.description | plainify | htmlUnescape | chomp }}
+{{- $mediaDescription := or .Description .Summary site.Params.description | plainify | htmlUnescape | chomp }}
+{{- if .Params.media }}{{- $mediaDescription = .Description }}{{- end }}
+{{- with $mediaDescription }}
   <meta property="og:description" content="{{ . }}">
 {{- end }}
 
@@ -35,6 +37,9 @@
   <meta property="og:type" content="website">
 {{- end }}
 
+{{- if .Params.media }}
+<meta property="og:image" content="{{ .Params.ogurl }}">
+{{- else }}
 {{- with .Params.images }}
   {{- range . | first 6 }}
     <meta property="og:image" content="{{ . | absURL }}">
@@ -45,6 +50,8 @@
       <meta property="og:image" content="{{ . | absURL }}">
     {{- end }}
   {{- end }}
+{{- end }}
+
 {{- end }}
 
 {{- with .Params.audio }}

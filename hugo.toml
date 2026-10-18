@@ -1,3 +1,4 @@
+ignoreFiles = ['(^|[\/])content[\/]poslaniya[\/]']
 baseURL = "https://bgzona.win/"
 languageCode = "bg"
 title = "BG Зона - независима и неутрална България"
@@ -6,6 +7,7 @@ canonifyURLs = true
 relativeURLs = false
 
 [params]
+  mainSections = ["statii"]
   ShowReadingTime = false
   ShowPostNavLinks = false
   hideMeta = true
@@ -67,3 +69,6 @@ relativeURLs = false
   [markup.goldmark]
     [markup.goldmark.renderer]
       unsafe = true
+
+[params.media]
+  enabled = false

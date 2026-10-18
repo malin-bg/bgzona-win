@@ -1,0 +1,1 @@
+{{ define "main" }}{{ if site.Params.media.enabled }}{{ partial "bgz-media/gallery.html" . }}{{ else }}<h1>{{ .Title }}</h1>{{ .Content }}{{ end }}{{ end }}

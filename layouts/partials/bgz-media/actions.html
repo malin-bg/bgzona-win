@@ -1,0 +1,10 @@
+{{- $page := .page -}}
+<nav class="media-actions" aria-label="Действия за {{ $page.Title }}">
+  <a {{ if .single }}id="facebook-share"{{ end }} class="media-action media-action-facebook" href="{{ printf "https://www.facebook.com/sharer/sharer.php?u=%s" (urlquery $page.Permalink) }}" target="_blank" rel="noopener noreferrer" aria-label="Сподели {{ $page.Title }} във Facebook (нов раздел)">Facebook<span class="media-sr-only"> — нов раздел</span></a>
+  <button {{ if .single }}id="copy-link"{{ end }} class="media-action media-action-copy" type="button" data-copy-url="{{ $page.Permalink }}" data-url="{{ $page.Permalink }}" aria-label="Копирай връзката към {{ $page.Title }}">Копирай</button>
+  <a {{ if .single }}id="open-original"{{ end }} class="media-action media-action-original" href="{{ $page.Params.full }}" target="_blank" rel="noopener noreferrer" aria-label="Отвори оригинала на {{ $page.Title }} (нов раздел)">Оригинал<span class="media-sr-only"> — нов раздел</span></a>
+</nav>
+<div class="media-card-footer">
+  <span class="media-copy-status" role="status" aria-live="polite"></span>
+  {{ if not .single }}<a class="media-page-link" href="{{ $page.Permalink }}" target="_blank" rel="noopener noreferrer" aria-label="Страница за {{ $page.Title }} (нов раздел)">Страница ↗<span class="media-sr-only"> — нов раздел</span></a>{{ end }}
+</div>
