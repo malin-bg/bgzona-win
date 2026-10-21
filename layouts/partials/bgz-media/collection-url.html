@@ -1,0 +1,6 @@
+{{- $url := .Permalink -}}
+{{- if and site.Params.media.enabled .IsSection (in (slice "kolaji" "poslaniya") .Section) (gt (len .RegularPages) 50) -}}
+  {{- $pager := .Paginate (.RegularPages.ByParam "number") 50 -}}
+  {{- $url = $pager.URL | absURL -}}
+{{- end -}}
+{{- return $url -}}

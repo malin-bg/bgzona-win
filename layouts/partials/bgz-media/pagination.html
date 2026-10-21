@@ -1,0 +1,9 @@
+{{ if gt .TotalPages 1 }}
+<footer class="page-footer">
+  <nav class="pagination media-pagination" aria-label="Страници на галерията">
+    {{ if .HasPrev }}<a class="prev" href="{{ .Prev.URL | absURL }}" rel="prev">Предишна</a>{{ end }}
+    <span class="media-sr-only" data-page="{{ .PageNumber }}" aria-current="page">Страница {{ .PageNumber }} от {{ .TotalPages }}</span>
+    {{ if .HasNext }}<a class="next" href="{{ .Next.URL | absURL }}" rel="next">Следваща</a>{{ end }}
+  </nav>
+</footer>
+{{ end }}
