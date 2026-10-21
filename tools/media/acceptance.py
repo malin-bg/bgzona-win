@@ -1,7 +1,7 @@
 """B3A checks adapted to current-source baseline and portable paths."""
 from pathlib import Path
 from urllib.parse import urlsplit,parse_qs,urljoin,unquote
-import json,html,xml.etree.ElementTree as ET
+import json,html,re,xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 import subprocess,tempfile
 from html_probe import Doc,inspect_image,local
@@ -79,11 +79,32 @@ def homepage_article_cards(buildroot):
  return bool(valid and not bad),{'eligible':len(eligible),'expected':len(expected),'actual':len(cards),
         'expected_urls':expected,'actual_urls':urls,'invalid_targets':bad,'inventory':str(probe/'public/index.json')}
 
+def current_only_public(out,manifest,states):
+ """Check the final tree, including files contributed by static mounts."""
+ expected={r['publicPath'] for r in manifest['items']}
+ actual={p.relative_to(out).as_posix() for col in ('kolaji','poslaniya')
+         for p in (out/col/'full').rglob('*') if p.is_file()}
+ hidden={key for key,state in states.items() if state!='published'}
+ hidden_pages={('kolaji/kolaj-' if key.startswith('bgzona-p-') else 'poslaniya/p-')+key[-5:]+'/' for key in hidden}
+ bad_pages=sorted(rel for rel in hidden_pages if (out/rel).exists())
+ stale=[]
+ for p in out.rglob('*'):
+  if not p.is_file() or p.suffix not in ('.html','.xml','.json','.txt'):continue
+  text=html.unescape(p.read_text(encoding='utf8'))
+  refs=re.findall(r'(?<!bgz-media)/(?:kolaji|poslaniya)/full/[^\s"<>?&#\\\\]+',text)
+  if any(ref.lstrip('/') not in expected for ref in refs) or any('/'+rel in text for rel in hidden_pages) or any(key in text for key in hidden):
+   stale.append(p.relative_to(out).as_posix())
+ detail={'unexpected_originals':sorted(actual-expected),'missing_originals':sorted(expected-actual),
+         'archived_pages':bad_pages,'stale_references':sorted(stale)}
+ return not any(detail.values()),detail
+
 def validate(buildroot,baseline_output,report):
  manifest=json.loads((buildroot/'validated-manifest.json').read_bytes())
  states=json.loads((buildroot/'build-receipt.json').read_bytes())['states']
  out=buildroot/'public';rows=manifest['items'];result=[];pages={}
  def ck(label,ok,detail=None):result.append({'test':label,'status':'PASS' if ok else 'FAIL','detail':detail})
+ current_ok,current_detail=current_only_public(out,manifest,states)
+ ck('current-only-public-file-set-and-archive-hiding',current_ok,current_detail)
  home_ok,home_detail=homepage_article_cards(buildroot)
  ck('homepage-article-cards',home_ok,home_detail)
  galleries={col:Gallery((out/col/'index.html').read_text(encoding='utf8')) for col in ('kolaji','poslaniya')}

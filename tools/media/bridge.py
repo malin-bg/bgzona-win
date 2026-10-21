@@ -6,18 +6,33 @@ COLS={'kolaji':'p','poslaniya':'m'}
 def safe(base,rel):
  if not isinstance(rel,str) or '\\' in rel or ':' in rel:raise Reject('BRIDGE_PATH')
  p=PurePosixPath(rel)
- if p.is_absolute() or '..' in p.parts or not p.parts:raise Reject('BRIDGE_PATH')
+ if p.is_absolute() or '..' in p.parts or not p.parts or p.as_posix()!=rel or any(x.endswith((' ','.')) for x in p.parts):raise Reject('BRIDGE_PATH')
  result=base.joinpath(*p.parts)
- if not result.resolve().is_relative_to(base.resolve()) or any(p.is_symlink() for p in [result,*result.parents] if p.is_relative_to(base)):raise Reject('BRIDGE_PATH')
+ if not result.resolve().is_relative_to(base.resolve()) or any((p.is_symlink() or p.is_junction()) for p in [result,*result.parents] if p.is_relative_to(base)):raise Reject('BRIDGE_PATH')
  return result
+
+def strict_json(raw):
+ def unique(pairs):
+  result={}
+  for key,value in pairs:
+   if key in result:raise Reject('BRIDGE_DUPLICATE_JSON_KEY')
+   result[key]=value
+  return result
+ return json.loads(raw.decode('utf-8-sig','strict'),object_pairs_hook=unique)
+
 def derive(artifact,expected):
  artifact=Path(artifact).resolve()
- actual={p.relative_to(artifact).as_posix():fhash(p) for p in artifact.rglob('*') if p.is_file()}
+ actual={}
+ for p in artifact.rglob('*'):
+  rel=p.relative_to(artifact).as_posix();safe(artifact,rel)
+  if p.is_file():
+   if p.stat().st_nlink!=1:raise Reject('BRIDGE_LINK')
+   actual[rel]=fhash(p)
  if actual!=expected:raise Reject('BRIDGE_ARTIFACT_SET_OR_HASH')
  for rel in actual:safe(artifact,rel)
  raw_catalog=(artifact/'catalog.json').read_bytes()
  if digest(raw_catalog)!=expected.get('catalog.json'):raise Reject('BRIDGE_CATALOG_CHANGED')
- cat=json.loads(raw_catalog.decode('utf-8-sig','strict'))
+ cat=strict_json(raw_catalog)
  if set(cat)!= {'schema','items'} or cat['schema']!=1 or not isinstance(cat['items'],list):raise Reject('BRIDGE_SCHEMA')
  rows=[];seen=set();urls=set();used={'catalog.json'};states={}
  for row in cat['items']:
@@ -51,6 +66,7 @@ def derive(artifact,expected):
   rows.append(target)
  if used!=set(actual):raise Reject('BRIDGE_UNREFERENCED_FILE')
  return {'schema':1,'source_catalog_sha256':digest(raw_catalog),'items':sorted(rows,key=lambda x:(x['collection'],x['number']))},states,cat
+
 def materialize(artifact,expected,destination):
  manifest,states,cat=derive(artifact,expected)
  dest=Path(destination).resolve()
