@@ -4,7 +4,11 @@
   <meta property="og:site_name" content="{{ . }}">
 {{- end }}
 
-{{- with or .Title site.Title site.Params.title | plainify }}
+{{- $ogTitle := or .Title site.Title site.Params.title | plainify }}
+{{- if and .Params.media (in (slice "poslaniya" "kolaji") .Params.collection) }}
+  {{- with strings.TrimSpace (.Params.usertext | default "") }}{{- $ogTitle = . }}{{- end }}
+{{- end }}
+{{- with $ogTitle }}
   <meta property="og:title" content="{{ . }}">
 {{- end }}
 
