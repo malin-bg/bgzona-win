@@ -67,27 +67,113 @@ def check_record(record, raw, index, previous):
             'seq': record['registry_seq'], 'registry': record['registry_sha256']})), 'CID_LEDGER_OPERATION')
 
 
-def verify_ledger(get, tip, genesis, expected):
-    sha = tip
+"""Bounded Git tree/object equivalent of the existing D3 history verifier."""
+def git_object(kind, raw):
+    return sha1(kind.encode() + b' ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+
+
+def git_tree(rows):
+    return git_object('tree', b''.join(mode.encode() + b' ' + name.encode('ascii') + b'\0' +
+            bytes.fromhex(oid) for name, mode, oid in rows))
+
+
+def ledger_objects(get, tip):
+    """Read one pinned Git history and bind its archive to every historical tree.
+
+    No acceptance cache. Only immutable identifiers are reused in this call;
+    resolve/check_heads retain their independent fresh authority checks.
+    """
+    from io import BytesIO
+    from zipfile import ZipFile, ZIP_STORED, ZIP_DEFLATED
+    import stat
+    require(hash_string(tip, 40), 'CID_LEDGER_COMMIT')
     chain = []
-    for _ in range(64):
-        row = provider(get, CONTROL, 'git/commits/' + sha)
-        require(row['sha'] == sha, 'CID_LEDGER_COMMIT')
-        chain.append(sha)
-        parents = row['parents']
-        if not parents:
-            break
-        require(len(parents) == 1 and hash_string(parents[0]['sha'], 40), 'CID_LEDGER_PARENT')
-        sha = parents[0]['sha']
+    wanted = tip
+    for page in range(1, 4):
+        rows = provider(get, CONTROL, f'commits?sha={tip}&per_page=100&page={page}')
+        require(type(rows) is list and 0 < len(rows) <= 100, 'CID_LEDGER_PAGE')
+        for pos, row in enumerate(rows):
+            require(len(chain) < 256, 'CID_LEDGER_LIMIT')
+            require(row['sha'] == wanted and hash_string(wanted, 40) and
+                    all(old['sha'] != wanted for old in chain), 'CID_LEDGER_COMMIT')
+            tree = row['commit']['tree']['sha']
+            require(hash_string(tree, 40), 'CID_LEDGER_TREE')
+            chain.append(dict(sha=wanted, tree=tree))
+            parents = row['parents']
+            require(type(parents) is list, 'CID_LEDGER_PARENT')
+            if not parents:
+                require(pos == len(rows)-1, 'CID_LEDGER_PAGE')
+                break
+            require(len(parents) == 1 and hash_string(parents[0]['sha'], 40), 'CID_LEDGER_PARENT')
+            wanted = parents[0]['sha']
+        else:
+            require(len(rows) == 100, 'CID_LEDGER_GENESIS')
+            continue
+        break
     else:
         raise RuntimeError('CID_LEDGER_LIMIT')
+    count = len(chain)
+    root = provider(get, CONTROL, 'git/trees/' + chain[0]['tree'] + '?recursive=1')
+    require(root['sha'] == chain[0]['tree'] and root['truncated'] is False and
+            type(root['tree']) is list and len(root['tree']) == count+2, 'CID_LEDGER_TREE')
+    paths = {'anchor.json', 'records', *(f'records/{i:08d}.json' for i in range(count))}
+    meta = {}
+    for row in root['tree']:
+        path = row['path']
+        require(path in paths and path not in meta and hash_string(row['sha'], 40), 'CID_LEDGER_TREE_PATH')
+        if path == 'records':
+            require((row['mode'], row['type']) == ('040000', 'tree'), 'CID_LEDGER_TREE_MODE')
+        else:
+            require((row['mode'], row['type']) == ('100644', 'blob') and
+                    type(row['size']) is int and 0 < row['size'] <= 32000, 'CID_LEDGER_TREE_MODE')
+        meta[path] = row
+    require(set(meta) == paths, 'CID_LEDGER_TREE_PATH')
+    # Bounded public source transport. Its ZIP bytes are never an authority.
+    wire = get('https://codeload.github.com/' + CONTROL + '/zip/' + tip, 16_000_000)
+    require(0 < len(wire) <= 16_000_000, 'CID_LEDGER_ARCHIVE_SIZE')
+    prefix = CONTROL.split('/')[1] + '-' + tip + '/'
+    buffers = {}
+    with ZipFile(BytesIO(wire)) as archive:
+        infos = archive.infolist()
+        require(len(infos) <= count+4 and sum(i.file_size for i in infos) <= (count+1)*32000,
+                'CID_LEDGER_ARCHIVE_SIZE')
+        seen = set()
+        for info in infos:
+            require(info.filename.startswith(prefix) and info.filename not in seen and
+                    not info.flag_bits & 1 and info.compress_type in (ZIP_STORED, ZIP_DEFLATED),
+                    'CID_LEDGER_ARCHIVE_MEMBER')
+            seen.add(info.filename)
+            name = info.filename[len(prefix):]
+            mode = info.external_attr >> 16
+            if info.is_dir():
+                require(name in ('', 'records/') and stat.S_IFMT(mode) in (0, stat.S_IFDIR),
+                        'CID_LEDGER_ARCHIVE_MEMBER')
+                continue
+            require(name in paths and name != 'records' and
+                    stat.S_IFMT(mode) in (0, stat.S_IFREG) and
+                    info.file_size == meta[name]['size'] <= 32000, 'CID_LEDGER_ARCHIVE_MEMBER')
+            raw = archive.read(info)
+            require(len(raw) == info.file_size and git_object('blob', raw) == meta[name]['sha'],
+                    'CID_BLOB')
+            buffers[name] = raw
+    require(set(buffers) == paths-{'records'}, 'CID_LEDGER_ARCHIVE_MEMBERS')
+    records = [buffers[f'records/{i:08d}.json'] for i in range(count)]
+    require(buffers['anchor.json'] == records[-1], 'CID_LEDGER_HISTORY')
+    entries = []
+    for i, commit in enumerate(reversed(chain)):
+        oid = meta[f'records/{i:08d}.json']['sha']
+        entries.append((f'{i:08d}.json', '100644', oid))
+        records_tree = git_tree(entries)
+        calculated = git_tree([('anchor.json', '100644', oid), ('records', '40000', records_tree)])
+        require(calculated == commit['tree'], 'CID_LEDGER_HISTORY')
+    require(records_tree == meta['records']['sha'], 'CID_LEDGER_TREE')
+    return records
+
+
+def verify_ledger(get, tip, genesis, expected):
     previous = None
     old = None
-    for i, commit in enumerate(reversed(chain)):
-        path = f'records/{i:08d}.json'
-        raw = blob_at(get, CONTROL, path, tip)
-        require(raw == blob_at(get, CONTROL, 'anchor.json', commit) and
-                (commit == tip or raw == blob_at(get, CONTROL, path, commit)), 'CID_LEDGER_HISTORY')
+    for i, raw in enumerate(ledger_objects(get, tip)):
         row = json.loads(raw)
         check_record(row, raw, i, previous)
         previous = digest(raw)

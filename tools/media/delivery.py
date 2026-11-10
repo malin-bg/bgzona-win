@@ -54,10 +54,13 @@ def get(url, limit):
          for r in (resolve_input.CONTROL,resolve_input.ASSETS,REPOSITORY)))
     browser=(u.hostname=='github.com' and u.path.startswith('/'+resolve_input.CONTROL+'/releases/download/'))
     version=(u.hostname=='dev.bgzona.win' and u.path=='/media-version.json' and re.fullmatch('cid=[0-9a-f]{64}',u.query))
-    require(api or browser or version,'PROD_READ_SCOPE')
+    ledger_archive=(u.hostname=='codeload.github.com' and not u.query and not u.fragment and
+                    re.fullmatch('/'+resolve_input.CONTROL+'/zip/[0-9a-f]{40}',u.path) is not None)
+    require(api or browser or version or ledger_archive,'PROD_READ_SCOPE')
     headers={'User-Agent':'bgzona-prod-input/1','Accept':'application/vnd.github+json' if api else 'application/octet-stream'}
     token=os.environ.get('GH_TOKEN')
-    if token and api:
+    if api and os.environ.get('GITHUB_ACTIONS')=='true':
+        require(bool(token),'PROD_READ_AUTH_REQUIRED')
         require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')==REPOSITORY and
                 os.environ.get('GITHUB_REPOSITORY_ID')=='1128312231' and os.environ.get('GITHUB_REF')=='refs/heads/main' and
                 os.environ.get('GITHUB_WORKFLOW_REF')==REPOSITORY+'/.github/workflows/hugo.yml@refs/heads/main' and
