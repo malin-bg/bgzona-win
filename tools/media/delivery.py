@@ -16,13 +16,17 @@ from artifact_seal import checked_absolute, require, safe_path, seal, verify, in
 from bridge import derive
 from media_support import atomic, data, digest, fhash
 from acceptance import validate
+import resolve_input
 
 REPOSITORY = 'malin-bg/bgzona-win'
 BASE = 'https://bgzona.win/'
 
 
 def read_lock(path):
-    lock = json.loads(path.read_bytes().decode('utf-8-sig', 'strict'))
+    return validate_lock(json.loads(path.read_bytes().decode('utf-8-sig','strict')))
+
+
+def validate_lock(lock):
     require(set(lock) == {'schema', 'repository', 'archive_name', 'archive_sha256', 'bytes',
                          'members', 'source_catalog_sha256', 'expected_files_sha256',
                          'snapshot', 'provider'}, 'LOCK_SCHEMA')
@@ -40,35 +44,63 @@ def read_lock(path):
 
 
 def get(url, limit):
-    request = urllib.request.Request(url, headers={'User-Agent': 'bgzona-dev-input/1',
-                        'Accept': 'application/vnd.github+json' if url.startswith('https://api.github.com/')
-                        else 'application/octet-stream'})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        raw = response.read(limit + 1)
-    require(len(raw) <= limit, 'PROVIDER_SIZE_LIMIT')
+    """Bounded public reads; the existing PROD token never leaves fixed API origins."""
+    from urllib.error import HTTPError
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):return None
+    u=urllib.parse.urlsplit(url)
+    require(u.scheme=='https' and not u.username and not u.password and u.port in (None,443), 'PROD_READ_ORIGIN')
+    api=(u.hostname=='api.github.com' and any(u.path.startswith('/repos/'+r+'/') or u.path=='/repos/'+r
+         for r in (resolve_input.CONTROL,resolve_input.ASSETS,REPOSITORY)))
+    browser=(u.hostname=='github.com' and u.path.startswith('/'+resolve_input.CONTROL+'/releases/download/'))
+    version=(u.hostname=='dev.bgzona.win' and u.path=='/media-version.json' and re.fullmatch('cid=[0-9a-f]{64}',u.query))
+    require(api or browser or version,'PROD_READ_SCOPE')
+    headers={'User-Agent':'bgzona-prod-input/1','Accept':'application/vnd.github+json' if api else 'application/octet-stream'}
+    token=os.environ.get('GH_TOKEN')
+    if token and api:
+        require(os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')==REPOSITORY and
+                os.environ.get('GITHUB_REPOSITORY_ID')=='1128312231' and os.environ.get('GITHUB_REF')=='refs/heads/main' and
+                os.environ.get('GITHUB_WORKFLOW_REF')==REPOSITORY+'/.github/workflows/hugo.yml@refs/heads/main' and
+                os.environ.get('GITHUB_ACTOR_ID') in ('252877943','353092585') and os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and
+                re.fullmatch('[0-9a-f]{40}',os.environ.get('GITHUB_WORKFLOW_SHA','')), 'PROD_READ_CONTEXT')
+        headers['Authorization']='Bearer '+token
+    opener=urllib.request.build_opener(NoRedirect)
+    try:
+        response=opener.open(urllib.request.Request(url,headers=headers),timeout=30)
+    except HTTPError as exc:
+        target=exc.headers.get('Location','');v=urllib.parse.urlsplit(target)
+        require(browser and exc.code in (301,302,303,307,308) and v.scheme=='https' and
+                v.netloc in ('release-assets.githubusercontent.com','objects.githubusercontent.com'), 'PROD_READ_HTTP_OR_REDIRECT')
+        # Never forward API credentials or print a signed target.
+        try:response=opener.open(urllib.request.Request(target),timeout=30)
+        except Exception:raise RuntimeError('PROD_ASSET_READ_FAILED') from None
+    except Exception:raise RuntimeError('PROD_API_READ_FAILED') from None
+    with response:
+        require(response.status==200,'PROD_READ_STATUS');raw=response.read(limit+1)
+    require(len(raw)<=limit,'PROVIDER_SIZE_LIMIT')
     return raw
 
 
-def obtain(lock, local_archive=None):
+def obtain(lock, local_archive=None, *, provider_repository=REPOSITORY):
     if local_archive:
         require(os.environ.get('GITHUB_ACTIONS') != 'true', 'LOCAL_OVERRIDE_FORBIDDEN_IN_CI')
         raw = Path(local_archive).read_bytes()
     else:
         provider = lock['provider']
-        require(isinstance(provider, dict) and set(provider) == {'repository', 'release_id', 'asset_id', 'tag'},
+        require(isinstance(provider, dict) and set(provider) == {'release_id', 'asset_id', 'tag'},
                 'PROVIDER_NOT_ACTIVATED: verified Release asset is required; no fallback')
         require(all(type(provider[k]) is int and provider[k] > 0 for k in ('release_id', 'asset_id'))
                 and isinstance(provider['tag'], str) and bool(provider['tag']), 'PROVIDER_INVALID')
-        require(isinstance(provider['repository'], str) and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', provider['repository']), 'PROVIDER_REPOSITORY')
-        source_repository = provider['repository']
-        api = f'https://api.github.com/repos/{source_repository}/releases/{provider["release_id"]}'
+        api = f'https://api.github.com/repos/{provider_repository}/releases/{provider["release_id"]}'
         release = json.loads(get(api, 2_000_000))
         require(release['id'] == provider['release_id'] and release['tag_name'] == provider['tag']
                 and release['draft'] is False and release['prerelease'] is False, 'PROVIDER_RELEASE')
+        if provider_repository == resolve_input.CONTROL:
+            require(release.get('immutable') is True, 'PROVIDER_RELEASE_IMMUTABLE')
         matches = [a for a in release['assets'] if a['id'] == provider['asset_id']]
         require(len(matches) == 1, 'PROVIDER_ASSET')
         asset = matches[0]
-        url = (f'https://github.com/{source_repository}/releases/download/' +
+        url = (f'https://github.com/{provider_repository}/releases/download/' +
                urllib.parse.quote(provider['tag'], safe='') + '/' + lock['archive_name'])
         require(asset['name'] == lock['archive_name'] and asset['size'] == lock['bytes'] and
                 asset['state'] == 'uploaded' and asset['browser_download_url'] == url, 'PROVIDER_IDENTITY')
@@ -77,7 +109,7 @@ def obtain(lock, local_archive=None):
     return raw
 
 
-def unpack(raw, lock, destination):
+def unpack(raw, lock, destination, *, accepted=False):
     require(not destination.exists(), 'INPUT_DEST_EXISTS')
     with zipfile.ZipFile(BytesIO(raw)) as archive:
         members = archive.infolist()
@@ -91,8 +123,8 @@ def unpack(raw, lock, destination):
                     not stat.S_ISLNK(info.external_attr >> 16), 'ARCHIVE_MEMBER_TYPE')
             require(info.filename.casefold() not in names, 'ARCHIVE_DUPLICATE')
             names.add(info.filename.casefold())
-            require(info.filename.startswith('artifact/') or info.filename in
-                    ('expected-files.json', 'provenance.json'), 'ARCHIVE_PRIVATE_OR_EXTRA')
+            allowed = ('expected-files.json',) if accepted else ('expected-files.json', 'provenance.json')
+            require(info.filename.startswith('artifact/') or info.filename in allowed, 'ARCHIVE_PRIVATE_OR_EXTRA')
             buffers[info.filename] = archive.read(info)
     require(digest(buffers['expected-files.json']) == lock['expected_files_sha256'] and
             digest(buffers['artifact/catalog.json']) == lock['source_catalog_sha256'], 'INPUT_METADATA_SHA')
@@ -128,6 +160,8 @@ def main():
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--hugo', default='hugo')
     parser.add_argument('--local-archive', type=Path, help='Isolated local verification ONLY; rejected in Actions')
+    parser.add_argument('--accepted-cid', required=True)
+    parser.add_argument('--standard-trust', type=Path, required=True)
     args = parser.parse_args()
     site = checked_absolute(args.site)
     parent = checked_absolute(args.work.parent)
@@ -135,10 +169,19 @@ def main():
     require(not work.exists() and not work.is_symlink() and
             not work.is_relative_to(site) and not site.is_relative_to(work) and
             not any((p / '.git').exists() for p in (parent, *parent.parents)), 'NEW_EXTERNAL_WORK_REQUIRED')
-    lock = read_lock(site / 'tools/media/input-lock.json')
-    raw = obtain(lock, args.local_archive)  # Missing/invalid provider fails before any build.
+    require(args.local_archive is None, 'PROD_UNVERIFIED_LOCAL_OVERRIDE')
+    require(args.standard_trust.is_file() and not args.standard_trust.is_symlink() and
+            args.standard_trust.stat().st_size<=8192, 'PROD_TRUST_FILE')
+    wire=args.standard_trust.read_bytes();config=json.loads(wire)
+    known=json.loads((site/'tools/media/input-trust.json').read_bytes())
+    require(data(config)==wire and all(config[k]==known[k] for k in
+            ('schema','control_id','assets_id','ledger_genesis')), 'PROD_TRUST_ROOT')
+    accepted,registry=resolve_input.resolve(config,args.accepted_cid,get)
+    lock=validate_lock(accepted['input'])
+    raw=obtain(lock,provider_repository=resolve_input.CONTROL)
     work.mkdir()
-    manifest, states = unpack(raw, lock, work / 'input')
+    manifest, states = unpack(raw, lock, work / 'input', accepted=True)
+    resolve_input.verify_projection(work/'input',registry)
     # Baseline is rebuilt from CURRENT content, not a historical article/file allowlist.
     atomic(work / 'baseline.toml', ('resourceDir = ' + json.dumps((work / 'baseline-resources').as_posix()) + '\n').encode())
     run([args.hugo, '--source', str(site), '--config', str(site / 'hugo.toml') + ',' + str(work / 'baseline.toml'),
@@ -151,12 +194,17 @@ def main():
     # Acceptance and seal are in one trusted caller; arbitrary PASS text is not consulted.
     validate(candidate, work / 'baseline', work / 'acceptance.json')
     require(json.loads((candidate / 'validated-manifest.json').read_bytes()) == manifest, 'MANIFEST_CHANGED')
+    resolve_input.check_heads(get,accepted)
+    version=candidate/'public/media-version.json'
+    require(not version.exists() and not version.is_symlink(),'PROD_VERSION_PATH')
+    atomic(version,data(dict(cid=args.accepted_cid,channel='prod',registry_sha256=accepted['registry_sha256'])))
     tree = seal(candidate / 'public', work / 'site-seal.json')
     verify(candidate / 'public', work / 'site-seal.json', tree)
     atomic(work / 'site-tree.sha256', (tree + '\n').encode('ascii'))
     receipt = {'status': 'ACCEPTED_SEALED_UNDEPLOYED', 'archive_sha256': lock['archive_sha256'],
                'tree_sha256': tree, 'snapshot': lock['snapshot'],
                'mode': 'LOCAL_INPUT_TEST' if args.local_archive else 'RELEASE_PROVIDER', 'deployment': False}
+    receipt.update(cid=args.accepted_cid,mode='INDEPENDENT_D3_CID')
     atomic(work / 'delivery-receipt.json', data(receipt))
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:

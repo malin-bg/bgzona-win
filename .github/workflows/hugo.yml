@@ -4,23 +4,42 @@
     "push": {
       "branches": [
         "main"
+      ],
+      "paths-ignore": [
+        ".github/workflows/hugo.yml",
+        "tools/media/delivery.py",
+        "tools/media/resolve_input.py",
+        "tools/media/input-trust.json"
       ]
     },
-    "workflow_dispatch": {}
+    "workflow_dispatch": {
+      "inputs": {
+        "accepted_cid": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "input_trust": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        }
+      }
+    }
   },
   "permissions": {
     "contents": "read"
   },
   "concurrency": {
     "group": "pages",
-    "cancel-in-progress": true
+    "cancel-in-progress": false
   },
   "env": {
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "jobs": {
     "build": {
-      "if": "github.repository == 'malin-bg/bgzona-win' && github.ref == 'refs/heads/main'",
+      "if": "github.repository == 'malin-bg/bgzona-win' && github.repository_id == '1128312231' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && ((github.event_name == 'push' && github.actor_id == '252877943') || (github.event_name == 'workflow_dispatch' && github.actor_id == '353092585' && inputs.accepted_cid != '' && inputs.input_trust != ''))",
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 15,
       "steps": [
@@ -50,14 +69,21 @@
           "run": "set -euo pipefail\nmkdir \"$RUNNER_TEMP/bgz-hugo\"\ncurl --fail --location --silent --show-error --output \"$RUNNER_TEMP/hugo.tar.gz\" https://github.com/gohugoio/hugo/releases/download/v0.155.2/hugo_extended_0.155.2_linux-amd64.tar.gz\nprintf '%s  %s\\n' '2bf76c75610e75fa5d15fd3dd0e1377c16ce4fa7202713283c744a19323ff419' \"$RUNNER_TEMP/hugo.tar.gz\" | sha256sum --check --strict\ntar -xzf \"$RUNNER_TEMP/hugo.tar.gz\" -C \"$RUNNER_TEMP/bgz-hugo\" hugo\n\"$RUNNER_TEMP/bgz-hugo/hugo\" version"
         },
         {
-          "name": "Trusted input, build, current acceptance and seal",
+          "name": "Trusted PROD input, current-source build, acceptance and seal",
           "shell": "bash",
-          "run": "python -B tools/media/delivery.py --work \"$RUNNER_TEMP/bgz-delivery\" --hugo \"$RUNNER_TEMP/bgz-hugo/hugo\""
+          "run": "set -euo pipefail\ntrust=\"$RUNNER_TEMP/bgz-prod-input-trust.json\"\npython -B - \"$trust\" <<'PY'\nimport json,os,re,sys\nfrom pathlib import Path\nsys.path.insert(0,'tools/media')\nimport delivery,resolve_input\nfrom media_support import data,digest\nknown=json.loads(Path('tools/media/input-trust.json').read_bytes())\nif os.environ['GITHUB_EVENT_NAME']=='workflow_dispatch':\n    event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())\n    assert event['sender']['id']==353092585 and event['repository']['id']==1128312231\n    params=event['inputs'];assert set(params)=={'accepted_cid','input_trust'}\n    raw=params['input_trust'].encode();assert 0<len(raw)<=8192\n    obj=json.loads(raw);assert data(obj)==raw and obj['cid']==params['accepted_cid']\n    assert re.fullmatch('[0-9a-f]{64}',obj['cid']) and digest(data(obj['accepted']))==obj['cid']\n    assert all(obj[k]==known[k] for k in ('schema','control_id','assets_id','ledger_genesis'))\nelse:\n    assert os.environ['GITHUB_EVENT_NAME']=='push' and os.environ['GITHUB_ACTOR_ID']=='252877943'\n    obj=resolve_input.current(known,delivery.get)\nPath(sys.argv[1]).write_bytes(data(obj))\nPY\ncid=\"$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding=\"utf8\"))[\"cid\"])' \"$trust\")\"\npython -B tools/media/delivery.py --work \"$RUNNER_TEMP/bgz-delivery\" --hugo \"$RUNNER_TEMP/bgz-hugo/hugo\" --accepted-cid \"$cid\" --standard-trust \"$trust\"\npython -B - \"$cid\" <<'PY'\nimport json,os,sys\nfrom html.parser import HTMLParser\nfrom pathlib import Path\nfrom urllib.parse import urlsplit\nroot=Path(os.environ['RUNNER_TEMP'])/'bgz-delivery'\nseal=json.loads((root/'site-seal.json').read_bytes())\nfiles={r['path']:r['sha256'] for r in seal['files']}\ncatalog=json.loads((root/'input/artifact/catalog.json').read_bytes())\npaths={'/media-version.json','/','/kolaji/','/poslaniya/'}\nclass Page(HTMLParser):\n    def __init__(self):super().__init__();self.og=None\n    def handle_starttag(self,t,a):\n        a=dict(a)\n        if t=='meta' and a.get('property')=='og:image':self.og=a.get('content')\nfor row in catalog['items']:\n    if row['state']!='published':continue\n    page=row['page_url'];assert page.startswith('/') and page.endswith('/')\n    doc=Page();doc.feed((root/'candidate/public'/page.lstrip('/')/'index.html').read_text(encoding='utf8'))\n    u=urlsplit(doc.og);assert u.scheme=='https' and u.netloc=='bgzona.win' and not u.query and not u.fragment\n    paths.update((page,row['original'],u.path))\npairs=[]\nfor path in sorted(paths):\n    name=path.lstrip('/')+('index.html' if path.endswith('/') else '')\n    assert name in files and (root/'candidate/public'/name).stat().st_size<=16_000_000\n    pairs.append([path,files[name]])\nwire=json.dumps(pairs,separators=(',',':'),ensure_ascii=True)\nassert len(wire.encode())<=64000\nwith open(os.environ['GITHUB_OUTPUT'],'a',encoding='ascii') as f:\n    f.write('cid='+sys.argv[1]+'\\nchecks='+wire+'\\n')\nPY",
+          "id": "input",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}"
+          }
         },
         {
           "name": "Verify accepted output immediately before upload",
           "shell": "bash",
-          "run": "python -B tools/media/artifact_seal.py verify --root \"$RUNNER_TEMP/bgz-delivery/candidate/public\" --manifest \"$RUNNER_TEMP/bgz-delivery/site-seal.json\" --expected-digest \"$(cat \"$RUNNER_TEMP/bgz-delivery/site-tree.sha256\")\""
+          "run": "python -B tools/media/artifact_seal.py verify --root \"$RUNNER_TEMP/bgz-delivery/candidate/public\" --manifest \"$RUNNER_TEMP/bgz-delivery/site-seal.json\" --expected-digest \"$(cat \"$RUNNER_TEMP/bgz-delivery/site-tree.sha256\")\"\npython -B - <<'PY'\nimport json,os,sys\nsys.path.insert(0,'tools/media')\nimport delivery\nx=json.loads(delivery.get('https://api.github.com/repos/malin-bg/bgzona-win/git/ref/heads/main',32000))\nassert x['object']['sha']==os.environ['GITHUB_SHA'],'PROD_SOURCE_MOVED'\nPY",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}"
+          }
         },
         {
           "name": "Upload exactly accepted Pages output",
@@ -68,7 +94,11 @@
             "retention-days": 1
           }
         }
-      ]
+      ],
+      "outputs": {
+        "cid": "${{ steps.input.outputs.cid }}",
+        "checks": "${{ steps.input.outputs.checks }}"
+      }
     },
     "deploy": {
       "needs": "build",
@@ -91,8 +121,18 @@
           "with": {
             "artifact_name": "github-pages"
           }
+        },
+        {
+          "name": "Verify public PROD CID and files against the seal",
+          "shell": "bash",
+          "env": {
+            "CID": "${{ needs.build.outputs.cid }}",
+            "CHECKS": "${{ needs.build.outputs.checks }}"
+          },
+          "run": "set -euo pipefail\npython -B - <<'PY'\nimport hashlib,json,os,re,time\nfrom concurrent.futures import ThreadPoolExecutor\nfrom urllib.request import Request,build_opener,HTTPRedirectHandler\nclass NoRedirect(HTTPRedirectHandler):\n    def redirect_request(self,*a,**kw):return None\ncid=os.environ['CID'];assert re.fullmatch('[0-9a-f]{64}',cid)\npairs=json.loads(os.environ['CHECKS']);assert pairs and len(pairs)==len({p for p,h in pairs})\nfor p,h in pairs:\n    assert p.startswith('/') and not p.startswith('//') and '..' not in p.split('/') and '\\\\' not in p\n    assert re.fullmatch('[0-9a-f]{64}',h)\ndef check(pair):\n    path,want=pair;url='https://bgzona.win'+path\n    with build_opener(NoRedirect).open(Request(url+'?cid='+cid,headers={'Cache-Control':'no-cache'}),timeout=10) as r:\n        assert r.status==200 and r.geturl().split('?')[0]==url\n        raw=r.read(16_000_001)\n    assert len(raw)<=16_000_000 and hashlib.sha256(raw).hexdigest()==want\n    if path=='/media-version.json':assert json.loads(raw)['cid']==cid and json.loads(raw)['channel']=='prod'\ndeadline=time.monotonic()+90\nwhile True:\n    try:\n        with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(check,pairs))\n        print('PUBLIC_PROD_VERIFIED',cid,len(pairs));break\n    except Exception:\n        if time.monotonic()>=deadline:raise SystemExit('WAIT_VISIBILITY: independently read back the same deployment')\n        time.sleep(5)\nPY"
         }
       ]
     }
-  }
+  },
+  "run-name": "PROD ${{ inputs.accepted_cid || github.sha }}"
 }
