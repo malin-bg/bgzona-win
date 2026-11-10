@@ -23,6 +23,21 @@
           "type": "string",
           "required": false,
           "default": ""
+        },
+        "verify_only": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "published_source": {
+          "type": "string",
+          "required": false,
+          "default": ""
+        },
+        "published_run": {
+          "type": "string",
+          "required": false,
+          "default": ""
         }
       }
     }
@@ -49,8 +64,19 @@
           "with": {
             "submodules": "recursive",
             "persist-credentials": false,
-            "fetch-depth": 1
+            "fetch-depth": 1,
+            "ref": "${{ inputs.verify_only && inputs.published_source || github.sha }}"
           }
+        },
+        {
+          "name": "Verify bound build source",
+          "shell": "bash",
+          "env": {
+            "VERIFY_ONLY": "${{ inputs.verify_only }}",
+            "PUBLISHED_SOURCE": "${{ inputs.published_source }}",
+            "PUBLISHED_RUN": "${{ inputs.published_run }}"
+          },
+          "run": "set -euo pipefail\npython -B - <<'PY'\nimport json,os,re,subprocess\nfrom pathlib import Path\nverify=os.environ['VERIFY_ONLY']=='true'\nif os.environ['GITHUB_EVENT_NAME']=='workflow_dispatch':\n    event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())\n    p=event['inputs'];assert set(p)=={'accepted_cid','input_trust','verify_only','published_source','published_run'}\n    assert p['verify_only'] in ('true','false') and (p['verify_only']=='true')==verify\n    assert event['sender']['id']==353092585 and event['repository']['id']==1128312231\n    if verify:\n        assert re.fullmatch('[0-9a-f]{40}',p['published_source']) and re.fullmatch('[1-9][0-9]*',p['published_run'])\n    else:assert p['published_source']==p['published_run']==''\nelse:assert not verify and os.environ['GITHUB_EVENT_NAME']=='push'\nsource=os.environ['PUBLISHED_SOURCE'] if verify else os.environ['GITHUB_SHA']\nassert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==source\nprint('BUILD_SOURCE_BOUND',source,os.environ['PUBLISHED_RUN'])\nPY"
         },
         {
           "name": "Python 3.13.16",
@@ -71,7 +97,7 @@
         {
           "name": "Trusted PROD input, current-source build, acceptance and seal",
           "shell": "bash",
-          "run": "set -euo pipefail\ntrust=\"$RUNNER_TEMP/bgz-prod-input-trust.json\"\npython -B - \"$trust\" <<'PY'\nimport json,os,re,sys\nfrom pathlib import Path\nsys.path.insert(0,'tools/media')\nimport delivery,resolve_input\nfrom media_support import data,digest\nknown=json.loads(Path('tools/media/input-trust.json').read_bytes())\nif os.environ['GITHUB_EVENT_NAME']=='workflow_dispatch':\n    event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())\n    assert event['sender']['id']==353092585 and event['repository']['id']==1128312231\n    params=event['inputs'];assert set(params)=={'accepted_cid','input_trust'}\n    raw=params['input_trust'].encode();assert 0<len(raw)<=8192\n    obj=json.loads(raw);assert data(obj)==raw and obj['cid']==params['accepted_cid']\n    assert re.fullmatch('[0-9a-f]{64}',obj['cid']) and digest(data(obj['accepted']))==obj['cid']\n    assert all(obj[k]==known[k] for k in ('schema','control_id','assets_id','ledger_genesis'))\nelse:\n    assert os.environ['GITHUB_EVENT_NAME']=='push' and os.environ['GITHUB_ACTOR_ID']=='252877943'\n    obj=resolve_input.current(known,delivery.get)\nPath(sys.argv[1]).write_bytes(data(obj))\nPY\ncid=\"$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding=\"utf8\"))[\"cid\"])' \"$trust\")\"\npython -B tools/media/delivery.py --work \"$RUNNER_TEMP/bgz-delivery\" --hugo \"$RUNNER_TEMP/bgz-hugo/hugo\" --accepted-cid \"$cid\" --standard-trust \"$trust\"\npython -B - \"$cid\" <<'PY'\nimport json,os,sys\nfrom html.parser import HTMLParser\nfrom pathlib import Path\nfrom urllib.parse import urlsplit\nroot=Path(os.environ['RUNNER_TEMP'])/'bgz-delivery'\nseal=json.loads((root/'site-seal.json').read_bytes())\nfiles={r['path']:r['sha256'] for r in seal['files']}\ncatalog=json.loads((root/'input/artifact/catalog.json').read_bytes())\npaths={'/media-version.json','/','/kolaji/','/poslaniya/'}\nclass Page(HTMLParser):\n    def __init__(self):super().__init__();self.og=None\n    def handle_starttag(self,t,a):\n        a=dict(a)\n        if t=='meta' and a.get('property')=='og:image':self.og=a.get('content')\nfor row in catalog['items']:\n    if row['state']!='published':continue\n    page=row['page_url'];assert page.startswith('/') and page.endswith('/')\n    doc=Page();doc.feed((root/'candidate/public'/page.lstrip('/')/'index.html').read_text(encoding='utf8'))\n    u=urlsplit(doc.og);assert u.scheme=='https' and u.netloc=='bgzona.win' and not u.query and not u.fragment\n    paths.update((page,row['original'],u.path))\npairs=[]\nfor path in sorted(paths):\n    name=path.lstrip('/')+('index.html' if path.endswith('/') else '')\n    assert name in files and (root/'candidate/public'/name).stat().st_size<=16_000_000\n    pairs.append([path,files[name]])\nwire=json.dumps(pairs,separators=(',',':'),ensure_ascii=True)\nassert len(wire.encode())<=64000\nwith open(os.environ['GITHUB_OUTPUT'],'a',encoding='ascii') as f:\n    f.write('cid='+sys.argv[1]+'\\nchecks='+wire+'\\n')\nPY",
+          "run": "set -euo pipefail\ntrust=\"$RUNNER_TEMP/bgz-prod-input-trust.json\"\npython -B - \"$trust\" <<'PY'\nimport json,os,re,sys\nfrom pathlib import Path\nsys.path.insert(0,'tools/media')\nimport delivery,resolve_input\nfrom media_support import data,digest\nknown=json.loads(Path('tools/media/input-trust.json').read_bytes())\nif os.environ['GITHUB_EVENT_NAME']=='workflow_dispatch':\n    event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes())\n    assert event['sender']['id']==353092585 and event['repository']['id']==1128312231\n    params=event['inputs'];assert set(params)=={'accepted_cid','input_trust','verify_only','published_source','published_run'}\n    raw=params['input_trust'].encode();assert 0<len(raw)<=8192\n    obj=json.loads(raw);assert data(obj)==raw and obj['cid']==params['accepted_cid']\n    assert re.fullmatch('[0-9a-f]{64}',obj['cid']) and digest(data(obj['accepted']))==obj['cid']\n    assert all(obj[k]==known[k] for k in ('schema','control_id','assets_id','ledger_genesis'))\nelse:\n    assert os.environ['GITHUB_EVENT_NAME']=='push' and os.environ['GITHUB_ACTOR_ID']=='252877943'\n    obj=resolve_input.current(known,delivery.get)\nPath(sys.argv[1]).write_bytes(data(obj))\nPY\ncid=\"$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding=\"utf8\"))[\"cid\"])' \"$trust\")\"\npython -B tools/media/delivery.py --work \"$RUNNER_TEMP/bgz-delivery\" --hugo \"$RUNNER_TEMP/bgz-hugo/hugo\" --accepted-cid \"$cid\" --standard-trust \"$trust\"\npython -B - \"$cid\" <<'PY'\nimport json,os,sys\nfrom html.parser import HTMLParser\nfrom pathlib import Path\nfrom urllib.parse import urlsplit\nroot=Path(os.environ['RUNNER_TEMP'])/'bgz-delivery'\nseal=json.loads((root/'site-seal.json').read_bytes())\nfiles={r['path']:r['sha256'] for r in seal['files']}\ncatalog=json.loads((root/'input/artifact/catalog.json').read_bytes())\npaths={'/media-version.json','/','/kolaji/','/poslaniya/'}\nclass Page(HTMLParser):\n    def __init__(self):super().__init__();self.og=None\n    def handle_starttag(self,t,a):\n        a=dict(a)\n        if t=='meta' and a.get('property')=='og:image':self.og=a.get('content')\nfor row in catalog['items']:\n    if row['state']!='published':continue\n    page=row['page_url'];assert page.startswith('/') and page.endswith('/')\n    doc=Page();doc.feed((root/'candidate/public'/page.lstrip('/')/'index.html').read_text(encoding='utf8'))\n    u=urlsplit(doc.og);assert u.scheme=='https' and u.netloc=='bgzona.win' and not u.query and not u.fragment\n    paths.update((page,row['original'],u.path))\npairs=[]\nfor path in sorted(paths):\n    name=path.lstrip('/')+('index.html' if path.endswith('/') else '')\n    assert name in files and (root/'candidate/public'/name).stat().st_size<=16_000_000\n    pairs.append([path,files[name]])\nwire=json.dumps(pairs,separators=(',',':'),ensure_ascii=True)\nassert len(wire.encode())<=64000\nwith open(os.environ['GITHUB_OUTPUT'],'a',encoding='ascii') as f:\n    f.write('cid='+sys.argv[1]+'\\nchecks='+wire+'\\n')\nPY",
           "id": "input",
           "env": {
             "GH_TOKEN": "${{ github.token }}"
@@ -92,7 +118,8 @@
             "name": "github-pages",
             "path": "${{ runner.temp }}/bgz-delivery/candidate/public",
             "retention-days": 1
-          }
+          },
+          "if": "${{ !inputs.verify_only }}"
         }
       ],
       "outputs": {
@@ -102,7 +129,7 @@
     },
     "deploy": {
       "needs": "build",
-      "if": "github.repository == 'malin-bg/bgzona-win' && github.ref == 'refs/heads/main' && needs.build.result == 'success'",
+      "if": "github.repository == 'malin-bg/bgzona-win' && github.ref == 'refs/heads/main' && needs.build.result == 'success' && !inputs.verify_only",
       "permissions": {
         "pages": "write",
         "id-token": "write"
@@ -121,7 +148,19 @@
           "with": {
             "artifact_name": "github-pages"
           }
-        },
+        }
+      ]
+    },
+    "verify": {
+      "needs": [
+        "build",
+        "deploy"
+      ],
+      "if": "always() && needs.build.result == 'success' && ((inputs.verify_only && needs.deploy.result == 'skipped') || (!inputs.verify_only && needs.deploy.result == 'success'))",
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 5,
+      "permissions": {},
+      "steps": [
         {
           "name": "Verify public PROD CID and files against the seal",
           "shell": "bash",
@@ -134,5 +173,5 @@
       ]
     }
   },
-  "run-name": "PROD ${{ inputs.accepted_cid || github.sha }}"
+  "run-name": "${{ inputs.verify_only && format('VERIFY PROD {0}:{1}', inputs.accepted_cid, inputs.published_run) || format('PROD {0}', inputs.accepted_cid || github.sha) }}"
 }
